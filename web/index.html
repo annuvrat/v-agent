@@ -134,6 +134,21 @@
 
     const room = new Room({ adaptiveStream: true, dynacast: true });
     let agentState = "idle";
+    let controlSocket = null;
+
+    function connectControlSocket(roomName) {
+      const gatewayHost = window.location.hostname || "127.0.0.1";
+      controlSocket = new WebSocket(`ws://${gatewayHost}:8081/ws`);
+      controlSocket.addEventListener("open", () => {
+        controlSocket.send(JSON.stringify({ type: "session.start", room: roomName }));
+      });
+      controlSocket.addEventListener("message", (event) => {
+        console.log("gateway event", JSON.parse(event.data));
+      });
+      controlSocket.addEventListener("error", (event) => {
+        console.warn("gateway control connection failed", event);
+      });
+    }
 
     const STATE_TEXT = {
       connecting: "Connecting...",
@@ -240,6 +255,10 @@
         }
       })
       .on(RoomEvent.Disconnected, () => {
+        if (controlSocket) {
+          controlSocket.close();
+          controlSocket = null;
+        }
         setAgentState("idle");
         els.agentName.textContent = "";
         els.talk.disabled = true;
@@ -260,6 +279,7 @@
         if (!res.ok) throw new Error(`token server returned ${res.status}`);
         const { url, token } = await res.json();
         await room.connect(url, token);
+        connectControlSocket("lobby");
         await room.startAudio();
         await room.localParticipant.setMicrophoneEnabled(true);
         els.talk.disabled = false;

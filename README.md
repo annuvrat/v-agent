@@ -18,6 +18,9 @@ LiveKit Cloud
        Silero VAD · semantic turn detection via TurnDetector
                          ▲
         token_server.py (FastAPI) issues JWT via /get_token, serves web/
+
+   Optional control plane:
+   Browser control events -> gateway/ (Go WebSocket gateway) -> future gRPC session bridge
 ```
 
 ## Prerequisites
@@ -71,13 +74,14 @@ Then open <http://127.0.0.1:8000>, click **Connect**, and start talking.
 
 ## Files
 
-| File | Purpose |
-| --- | --- |
-| `agent.py` | LiveKit Agents worker: session wiring, turn handling, plugins |
-| `token_server.py` | FastAPI app: LiveKit JWT endpoint + static frontend host |
-| `web/index.html` | Single-page browser client (livekit-client via CDN) |
-| `requirements.txt` | Dependencies |
-| `.env.example` / `.env` | Credentials |
+| File                    | Purpose                                                                |
+| ----------------------- | ---------------------------------------------------------------------- |
+| `agent.py`              | LiveKit Agents worker: session wiring, turn handling, plugins          |
+| `token_server.py`       | FastAPI app: LiveKit JWT endpoint + static frontend host               |
+| `web/index.html`        | Single-page browser client (livekit-client via CDN)                    |
+| `gateway/`              | Optional Go WebSocket control gateway; LiveKit remains the media plane |
+| `requirements.txt`      | Dependencies                                                           |
+| `.env.example` / `.env` | Credentials                                                            |
 
 ## Troubleshooting
 
@@ -87,3 +91,18 @@ Then open <http://127.0.0.1:8000>, click **Connect**, and start talking.
   detection may fall back to local processing.
 - **Agent says it can't hear you**: confirm your browser's mic permission and
   that you are joining the same room in `web/index.html` and `get_token`.
+
+## Run the optional Go gateway
+
+Install Go 1.22 or newer, then start it from the repository root:
+
+```powershell
+cd gateway
+go mod tidy
+go run .
+```
+
+The gateway listens on `http://127.0.0.1:8081`. Check `GET /health` or connect
+to `/ws` with a WebSocket client. It currently handles session lifecycle and
+heartbeats only. Keep voice media on LiveKit WebRTC; add a gRPC bridge after
+the control protocol is stable.
