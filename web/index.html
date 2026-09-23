@@ -252,16 +252,33 @@
       let agentState = "idle";
       let controlSocket = null;
 
-      function connectControlSocket(roomName) {
+      async function connectControlSocket(roomName) {
+        const gatewayResponse = await fetch(
+          `/get_gateway_token?room=${encodeURIComponent(roomName)}`,
+        );
+
+        if (!gatewayResponse.ok) {
+          throw new Error("failed to get gateway token");
+        }
+
+        const { gateway_token } = await gatewayResponse.json();
+
         const gatewayHost = window.location.hostname || "127.0.0.1";
         controlSocket = new WebSocket(`ws://${gatewayHost}:8081/ws`);
+
         controlSocket.addEventListener("open", () => {
           controlSocket.send(
-            JSON.stringify({ type: "session.start", room: roomName ,token:"dev-only-change-me" }),
+            JSON.stringify({
+              type: "session.start",
+              room: roomName,
+              token: gateway_token,
+            }),
           );
         });
+
         controlSocket.addEventListener("message", (event) => {
           const message = JSON.parse(event.data);
+
           if (message.type === "session.ready") {
             els.agentName.textContent = "Gateway connected";
           } else if (message.type === "session.accepted") {
@@ -269,13 +286,14 @@
           } else if (message.type === "error") {
             els.agentName.textContent = `Gateway error: ${message.message}`;
           }
+
           console.log("gateway event", message);
         });
+
         controlSocket.addEventListener("error", (event) => {
           console.warn("gateway control connection failed", event);
         });
       }
-
       const STATE_TEXT = {
         connecting: "Connecting...",
         initializing: "Agent initializing...",
@@ -415,7 +433,8 @@
           if (!res.ok) throw new Error(`token server returned ${res.status}`);
           const { url, token } = await res.json();
           await room.connect(url, token);
-          connectControlSocket("lobby");
+          setAgentState("initializing");
+          await connectControlSocket("lobby");
           await room.startAudio();
           await room.localParticipant.setMicrophoneEnabled(true);
           els.talk.disabled = false;
@@ -424,6 +443,7 @@
           els.connect.textContent = "Connected";
         } catch (err) {
           console.error(err);
+          setAgentState("failed");
           els.status.textContent =
             "Connection failed - check agent worker and token server";
           els.connect.disabled = false;

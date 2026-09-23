@@ -74,10 +74,22 @@ async def entrypoint(ctx: JobContext) -> None:
     logger.info("starting agent for room %s", ctx.room.name)
 
     turn_handling = {
+        "endpointing": {
+            # Deepgram's final transcript can arrive after the first endpoint
+            # signal; leave enough time for the final words to be included.
+            "min_delay": 0.6,
+            "max_delay": 1.2,
+        },
         "interruption": {
             # user talks over the agent -> agent stops speaking and listens again
+            "enabled": True,
+            # Avoid the quota-limited remote adaptive detector; local VAD is
+            # predictable and does not silently switch modes mid-session.
+            "mode": "vad",
+            "min_duration": 0.15,
+            "min_words": 0,
             "resume_false_interruption": True,
-            "false_interruption_timeout": 1.0,
+            "false_interruption_timeout": 0.8,
         },
         # start generating (and optionally speaking) before the user fully finishes
         "preemptive_generation": {"enabled": True, "preemptive_tts": False, "max_retries": 3},

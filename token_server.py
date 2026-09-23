@@ -65,7 +65,14 @@ async def get_token(
             "room": room,
         }
     )
+@app.get("/get_gateway_token")
+async def get_gateway_token() -> JSONResponse:
+    gateway_token = os.getenv("GATEWAY_SECRET")
 
+    if not gateway_token:
+        raise RuntimeError("GATEWAY_SECRET is required")
+
+    return JSONResponse({"gateway_token": gateway_token})
 
 @app.get("/health")
 async def health() -> JSONResponse:
