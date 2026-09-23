@@ -24,15 +24,22 @@ var upgrader = websocket.Upgrader{
 		return true
 	},
 }
+var gatewaySecret string
 
 type envelope struct {
 	Type      string `json:"type"`
 	SessionID string `json:"session_id,omitempty"`
+	Room      string `json:"room,omitempty"`
+	Token     string `json:"token,omitempty"`
 	Message   string `json:"message,omitempty"`
 	At        string `json:"at,omitempty"`
 }
 
 func main() {
+	gatewaySecret = os.Getenv("GATEWAY_SECRET")
+	if gatewaySecret == "" {
+		log.Fatal("GATEWAY_SECRET is required")
+	}
 	port := os.Getenv("GATEWAY_PORT")
 	if port == "" {
 		port = "8081"
@@ -92,6 +99,34 @@ func websocketHandler(w http.ResponseWriter, r *http.Request) {
 		var incoming envelope
 		if err := json.Unmarshal(payload, &incoming); err != nil {
 			if !enqueue(outbound, envelope{Type: "error", Message: "invalid JSON message"}) {
+				return
+			}
+			continue
+		}
+		if incoming.Type == "session.start" {
+			if incoming.Token != gatewaySecret {
+				if !enqueue(outbound, envelope{
+					Type:    "error",
+					Message: "unauthorized",
+				}) {
+					return
+				}
+				continue
+			}
+
+			if incoming.Room == "" {
+				if !enqueue(outbound, envelope{Type: "error", Message: "room is required"}) {
+					return
+				}
+				continue
+			}
+			if !enqueue(outbound, envelope{
+				Type:      "session.accepted",
+				SessionID: sessionID,
+				Room:      incoming.Room,
+				Message:   "session accepted",
+				At:        time.Now().UTC().Format(time.RFC3339Nano),
+			}) {
 				return
 			}
 			continue
