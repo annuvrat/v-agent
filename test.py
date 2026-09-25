@@ -1,31 +1,20 @@
-s= "listen"
-l= "silent"
+nums="1243564567"
 
-def is_anagram(s, l):
-    counts={}
-    if len(s)!= len(l):
-        return False
+def largest_odd(nums):
+  result=[]
 
-    for char in s:  
-        if char not in counts:
-            counts[char]=1
-        else:
-            counts[char]+=1
+  for num in nums:
+    if num%3 == 0:
+      result.append(num)
 
 
-    for char in l:
-        if char not in counts:
-            return False
+  result.sort()
+  result.reverse()
+  for i in range(len(result)):
+    return result[i]
 
 
-        counts[char] -=1  
-
-    for count in counts.values():
-        if count!=0:
-         return False
-
-    return True
-
-
-
-print(is_anagram(s,l))
+  return False
+    
+print(largest_odd(nums))
+    
