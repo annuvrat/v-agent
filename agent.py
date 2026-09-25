@@ -14,7 +14,7 @@ from livekit.agents import (
     room_io,
     text_transforms,
 )
-from livekit.plugins import cartesia, deepgram, openai, silero
+from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
 
 logger = logging.getLogger("voice-agent")
 
@@ -134,8 +134,8 @@ async def entrypoint(ctx: JobContext) -> None:
         room=ctx.room,
         room_options=room_io.RoomOptions(
             audio_input=room_io.AudioInputOptions(
-                # uncomment to enable noise cancellation: python -m pip install livekit-plugins-noise-cancellation
-                # noise_cancellation=...,
+                # Filter steady room noise before VAD and Deepgram receive audio.
+                noise_cancellation=noise_cancellation.BVC(),
             ),
         ),
     )

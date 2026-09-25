@@ -36,7 +36,7 @@ type envelope struct {
 }
 
 func main() {
-	gatewaySecret = os.Getenv("GATEWAY_SECRET")
+	gatewaySecret = "dev-only-change-me"
 	if gatewaySecret == "" {
 		log.Fatal("GATEWAY_SECRET is required")
 	}

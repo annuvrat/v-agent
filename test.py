@@ -1,13 +1,31 @@
-arr = [11,7,15,2]
-k = 9
+s= "listen"
+l= "silent"
 
-def two_sum(arr, k):
-    num_map={}
-    for  i in range(len(arr)):
-        complement = k-arr[i]
-        if complement in num_map:
-            return [num_map[complement], i]
-        num_map[arr[i]] = i
-    return None
+def is_anagram(s, l):
+    counts={}
+    if len(s)!= len(l):
+        return False
 
-print(two_sum(arr, k))
+    for char in s:  
+        if char not in counts:
+            counts[char]=1
+        else:
+            counts[char]+=1
+
+
+    for char in l:
+        if char not in counts:
+            return False
+
+
+        counts[char] -=1  
+
+    for count in counts.values():
+        if count!=0:
+         return False
+
+    return True
+
+
+
+print(is_anagram(s,l))

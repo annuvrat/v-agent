@@ -3,6 +3,7 @@ livekit-plugins-deepgram
 livekit-plugins-openai
 livekit-plugins-cartesia
 livekit-plugins-silero
+livekit-plugins-noise-cancellation
 python-dotenv
 fastapi
 uvicorn[standard]
