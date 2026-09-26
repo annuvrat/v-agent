@@ -24,10 +24,16 @@ load_dotenv()
 
 SLOW_LLM_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.8"))
 STT_LANGUAGE = os.getenv("STT_LANGUAGE", "en-US")
 STT_KEYTERMS = [k.strip() for k in os.getenv("STT_KEYTERMS", "").split(",") if k.strip()]
-CARTESIA_EMOTION = os.getenv("CARTESIA_EMOTION") or None
+CARTESIA_VOICE = os.getenv("CARTESIA_VOICE", "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc")
+# Sonic-3 accepts a free-form emotion descriptor (only the first is used by the
+# plugin, so keep it a single rich phrase rather than a list).
+CARTESIA_EMOTION = os.getenv("CARTESIA_EMOTION") or "curious, warm and friendly, light and conversational"
+# Speech rate as a float (sonic-3 valid range 0.6 - 2.0). Slightly slower than
+# 1.0 reads more thoughtful and human when combined with an expressive emotion.
+CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.94"))
 LOG_SUMMARY_EVERY = int(os.getenv("LOG_SUMMARY_EVERY", "10") or "10")
 
 # Use LiveKit's built-in semantic turn detector ("end of turn" model).
@@ -46,25 +52,26 @@ def _configure_logging() -> None:
     level = getattr(logging, level_name, logging.INFO)
 
     log_file = os.getenv("LOG_FILE", "").strip()
-    fmt = "%(asctime)s.%(msecs)03d %(levelname)-7s %(message)s"
+    fmt = "%(asctime)s.%(msecs)03d %(levelname)-7s %(name)s: %(message)s"
     datefmt = "%H:%M:%S"
+    formatter = logging.Formatter(fmt, datefmt)
 
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s.%(msecs)03d %(levelname)-7s %(name)s: %(message)s",
-        datefmt=datefmt,
-        handlers=[
-            logging.StreamHandler(),
-        ],
-    )
-
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
     if log_file:
         path = Path(log_file)
         path.parent.mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(path, encoding="utf-8")
-        fh.setLevel(level)
-        fh.setFormatter(logging.Formatter(fmt, datefmt))
-        logging.getLogger().addHandler(fh)
+        handlers.append(logging.FileHandler(path, encoding="utf-8"))
+    for handler in handlers:
+        handler.setLevel(level)
+        handler.setFormatter(formatter)
+
+    # attach our own handlers to this logger only and stop propagation, otherwise
+    # livekit's root config prints every line a second time in its own format
+    logger.handlers.clear()
+    for handler in handlers:
+        logger.addHandler(handler)
+    logger.setLevel(level)
+    logger.propagate = False
 
     # keep the noise from the SDK itself down unless we're debugging
     for name in ("livekit", "livekit.agents", "livekit.plugins"):
@@ -108,6 +115,7 @@ class TurnTracker:
         self._user_final_at: float | None = None
         self._think_start: float | None = None
         self._speak_start: float | None = None
+        self._last_usage_sig: str | None = None
 
         self._e2e: list[float] = []
         self._ttft: list[float] = []
@@ -201,12 +209,9 @@ class TurnTracker:
             words = self._word_count(text)
 
             e2e = metrics.get("e2e_latency")
-            started = metrics.get("started_speaking_at")
-            stopped = metrics.get("stopped_speaking_at")
-            if e2e is None and started is not None and stopped is not None:
-                e2e = started - stopped
             if e2e is not None:
                 self._e2e.append(e2e)
+            spoke = self._ms_since(ev.created_at, self._speak_start)
 
             for key, bucket in (
                 ("llm_node_ttft", self._ttft),
@@ -221,8 +226,9 @@ class TurnTracker:
             if interrupted:
                 self.count_interrupted += 1
                 logger.warning(
-                    "TURN#%d AGENT_INTERRUPTED stopped_midway=True words_before_cut=%d text=%r",
+                    "TURN#%d AGENT_INTERRUPTED stopped_midway=True spoke=%.0fms full_words=%d text=%r",
                     self.turn,
+                    spoke,
                     words,
                     text,
                 )
@@ -283,7 +289,11 @@ class TurnTracker:
                 )
             parts.append(f"{getattr(usage, 'provider', '-')}/{getattr(usage, 'model', '-')}({fields})")
         line = " | ".join(parts)
-        logger.info("USAGE %s", line)
+        # session_usage_updated fires continuously while STT/TTS stream; only log
+        # when the figures actually changed so the TURN# lines stay readable.
+        if line and line != self._last_usage_sig:
+            self._last_usage_sig = line
+            logger.info("USAGE %s", line)
 
     # -- summary ---------------------------------------------------------
 
@@ -331,13 +341,18 @@ class VoiceAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are Mia, a friendly and curious voice assistant built with LiveKit. "
-                "You speak to the user over voice in a casual, warm tone. "
-                "Keep your responses concise and conversational - a sentence or two is "
-                "usually enough unless the user asks for detail. "
-                "Never use emojis, markdown, aal charsterisks, or speciacters; just plain "
-                "spoken text. Do not mention that you are an AI model or a system prompt. "
-                "If you did not hear the user clearly, ask them to repeat."
+                "You are Mia, a friendly and curious voice assistant. You are heard "
+                "over voice, so you talk the way a real person talks - never like a "
+                "written document or a scripted bot. "
+                "Keep it casual, warm, and conversational. Use short, varied sentences "
+                "with a natural rhythm, and use contractions naturally ('that's', "
+                "'you're', 'it's'). Let the words breathe: a comma or an occasional "
+                "ellipsis (...) creates a natural pause where a human would pause. "
+                "Write only plain spoken text - no emojis, no markdown, no bullets, "
+                "no numbers, no headings, no headers. Typically answer in one to three "
+                "sentences unless the user asks for detail. If you did not hear the "
+                "user clearly, ask them to repeat. Never mention that you are an AI "
+                "model or a system prompt."
             )
         )
 
@@ -397,6 +412,17 @@ async def entrypoint(ctx: JobContext) -> None:
     if STT_KEYTERMS:
         stt_kwargs["keyterms"] = STT_KEYTERMS
 
+    logger.info(
+        "CONFIG llm=%s temp=%s stt=%s/%s tts=sonic-3 voice=%s emotion=%s speed=%s",
+        SLOW_LLM_MODEL,
+        LLM_TEMPERATURE,
+        stt_kwargs["model"],
+        STT_LANGUAGE,
+        CARTESIA_VOICE[:8] + "...",
+        CARTESIA_EMOTION,
+        CARTESIA_SPEED,
+    )
+
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
         stt=deepgram.STT(**stt_kwargs),
@@ -408,8 +434,9 @@ async def entrypoint(ctx: JobContext) -> None:
         ),
         tts=cartesia.TTS(
             model="sonic-3",
-            voice=os.environ.get("CARTESIA_VOICE", "9626c31c-bec5-4cca-baa8-f8ba9e84c8bc"),
+            voice=CARTESIA_VOICE,
             emotion=CARTESIA_EMOTION,
+            speed=CARTESIA_SPEED,
         ),
         turn_handling=TurnHandlingOptions(**turn_handling),
         # give the browser a moment to calibrate acoustic echo cancellation so
