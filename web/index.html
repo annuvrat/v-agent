@@ -61,37 +61,50 @@
       .indicator-wrap {
         display: flex;
         align-items: center;
-        gap: 14px;
-        margin-bottom: 22px;
+        gap: 16px;
+        margin-bottom: 24px;
       }
       .indicator {
-        width: 56px;
-        height: 56px;
+        --indicator-active: var(--idle);
+        width: 64px;
+        height: 64px;
         border-radius: 50%;
-        background: var(--idle);
+        background: var(--indicator-active);
         position: relative;
         flex: 0 0 auto;
-        transition: background 0.25s ease;
+        transition:
+          background 0.25s ease,
+          opacity 0.4s ease,
+          transform 0.4s ease,
+          box-shadow 0.25s ease;
+        box-shadow: 0 0 22px 3px color-mix(in srgb, var(--indicator-active) 40%, transparent);
+      }
+      /* no gray circle before the session is live */
+      .indicator[data-state="idle"] {
+        opacity: 0;
+        transform: scale(0.8);
+        pointer-events: none;
+      }
+      .indicator[data-state="listening"] {
+        --indicator-active: var(--listening);
+      }
+      .indicator[data-state="thinking"] {
+        --indicator-active: var(--thinking);
+      }
+      .indicator[data-state="speaking"] {
+        --indicator-active: var(--speaking);
+      }
+      .indicator[data-state="connecting"],
+      .indicator[data-state="initializing"] {
+        --indicator-active: var(--accent);
       }
       .indicator::after {
         content: "";
         position: absolute;
         inset: 0;
         border-radius: 50%;
-        border: 2px solid currentColor;
-        opacity: 0.5;
-      }
-      .indicator[data-state="listening"] {
-        background: var(--listening);
-        color: var(--listening);
-      }
-      .indicator[data-state="thinking"] {
-        background: var(--thinking);
-        color: var(--thinking);
-      }
-      .indicator[data-state="speaking"] {
-        background: var(--speaking);
-        color: var(--speaking);
+        border: 2px solid var(--indicator-active);
+        opacity: 0;
       }
       .indicator[data-state="listening"]::after,
       .indicator[data-state="thinking"]::after,
@@ -349,6 +362,14 @@
 
       let currentAgentRow = null;
       let currentUserRow = null;
+      let agentRowSegId = null;
+      let userRowSegId = null;
+      // LiveKit re-emits each segment with the full text so far; appending the
+      // whole string each event is what produced those duplicated words. We
+      // diff against the last emission for that segment id and append only the
+      // newly-transcribed portion. A new segment id (or a final flag) means the
+      // agent finished its sentence, so the next text starts a fresh bubble.
+      const segCache = new Map();
 
       function scrollBottom() {
         els.transcript.scrollTop = els.transcript.scrollHeight;
@@ -356,24 +377,49 @@
 
       function handleTranscription(segments, participant) {
         const isAgent = !!(participant && participant.isAgent);
-        for (const seg of segments) {
+        for (const [i, seg] of segments.entries()) {
+          const text = seg.text || "";
+          const id =
+            seg.id != null ? seg.id : seg.segmentId ?? `${participant && participant.identity || "?"}:${i}`;
+          const prev = segCache.get(id) || "";
+          let delta = text;
+          if (text.length >= prev.length && text.startsWith(prev)) {
+            delta = text.slice(prev.length);
+          }
+          segCache.set(id, text);
+
           if (isAgent) {
-            // agent transcripts arrive as delta chunks; append to a single bubble per turn
-            if (!currentAgentRow) currentAgentRow = addRow("agent");
+            // end of the current utterance: never leave a stale bubble open
+            if (seg.isFinal) {
+              currentAgentRow = null;
+              segCache.delete(id);
+              if (!delta) continue;
+            } else if (currentAgentRow && id !== agentRowSegId) {
+              currentAgentRow = null;
+            }
+            if (!delta) continue;
+            if (!currentAgentRow) {
+              currentAgentRow = addRow("agent");
+              agentRowSegId = id;
+            }
             setText(
               currentAgentRow,
-              (currentAgentRow.querySelector(".text")?.textContent || "") +
-                seg.text,
+              (currentAgentRow.querySelector(".text")?.textContent || "") + delta,
             );
-            if (seg.isFinal) currentAgentRow = null;
           } else {
             if (seg.isFinal) {
               currentAgentRow = null;
               currentUserRow = null;
-              setText(addRow("user"), seg.text);
+              setText(addRow("user"), text);
+              segCache.delete(id);
             } else {
-              if (!currentUserRow) currentUserRow = addRow("user");
-              setText(currentUserRow, seg.text);
+              if (currentUserRow && id !== userRowSegId) currentUserRow = null;
+              if (!delta) continue;
+              if (!currentUserRow) {
+                currentUserRow = addRow("user");
+                userRowSegId = id;
+              }
+              setText(currentUserRow, (currentUserRow.querySelector(".text")?.textContent || "") + delta);
             }
           }
         }

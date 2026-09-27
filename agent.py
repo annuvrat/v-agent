@@ -14,9 +14,12 @@ from livekit.agents import (
     TurnHandlingOptions,
     cli,
     room_io,
-    text_transforms,
 )
 from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
+
+from tools import calculate, get_weather_today, web_search, what_time_is_it
+
+AGENT_TOOLS = [web_search, get_weather_today, what_time_is_it, calculate]
 
 logger = logging.getLogger("voice-agent")
 
@@ -35,6 +38,55 @@ CARTESIA_EMOTION = os.getenv("CARTESIA_EMOTION") or "curious, warm and friendly,
 # 1.0 reads more thoughtful and human when combined with an expressive emotion.
 CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.94"))
 LOG_SUMMARY_EVERY = int(os.getenv("LOG_SUMMARY_EVERY", "10") or "10")
+
+# -- dynamic emotion ---------------------------------------------------------
+# Sonic-3 lets a free-form phrase steer the delivery. We pick the phrase per
+# turn from the user's wording so Mia sounds like she's actually listening.
+NEUTRAL_EMOTIONS = [
+    "curious, warm and friendly, light and conversational",
+    "friendly, bright and natural, with a relaxed pace",
+    "thoughtful, calm and conversational, lightly expressive",
+]
+EMOTION_RULES = [
+    # (label, trigger words, emotion phrase for sonic-3 voice controls)
+    (
+        "frustrated",
+        (
+            "annoy", "angry", "stupid", "hate", "awful", "terrible", "worst", "broken",
+            "not working", "issue", "problem", "frustrat", "wrong", "sick", "ugh",
+            "crap", "screw", "ridiculous", "useless", "junk", "fail",
+        ),
+        "calm, patient, empathetic and reassuring",
+    ),
+    (
+        "excited",
+        (
+            "awesome", "amazing", "great", "love", "excit", "wow", "cool", "fantastic",
+            "perfect", "incredible", "nice", "happy", "yay", "awesome", "brilliant",
+        ),
+        "bright, upbeat, warm and energetic",
+    ),
+    (
+        "sad",
+        (
+            "sad", "sorry", "miss", "lonely", "down", "cry", "hurt", "depressed",
+            "miserable", "grief", "heartbroken", "rough day",
+        ),
+        "soft, gentle, kind and comforting",
+    ),
+]
+_default_emotion_idx = 0
+
+
+def _emotion_for(text: str) -> str:
+    global _default_emotion_idx
+    lowered = text.lower()
+    for label, words, phrase in EMOTION_RULES:
+        if any(word in lowered for word in words):
+            logger.info("EMOTION_RULE matched=%s text=%r", label, text.strip())
+            return phrase
+    _default_emotion_idx = (_default_emotion_idx + 1) % len(NEUTRAL_EMOTIONS)
+    return NEUTRAL_EMOTIONS[_default_emotion_idx]
 
 # Use LiveKit's built-in semantic turn detector ("end of turn" model).
 # It ships with livekit-agents (>=1.6.1); if unavailable on your version we
@@ -352,7 +404,19 @@ class VoiceAgent(Agent):
                 "no numbers, no headings, no headers. Typically answer in one to three "
                 "sentences unless the user asks for detail. If you did not hear the "
                 "user clearly, ask them to repeat. Never mention that you are an AI "
-                "model or a system prompt."
+                "model or a system prompt. "
+                "Sound human, not scripted: vary your sentence openers and lengths, "
+                "mirror the user's energy and tone, and never open with canned "
+                "phrases like 'Great question!' or 'Sure, absolutely!' unless it fits "
+                "naturally. Occasional asides like 'honestly', 'you know', or 'so' "
+                "are fine in moderation. Acknowledge before you answer, and stay "
+                "relaxed. "
+                "You have tools for web search, weather, time, and quick math. They "
+                "only run when the user asks about those things - never invent data "
+                "you haven't retrieved. When you do use web search, present results "
+                "conversationally, e.g. 'Looks like...' or 'According to..., ' and "
+                "name the source briefly. If a tool is unavailable or fails, just "
+                "say so simply and move on naturally."
             )
         )
 
@@ -413,7 +477,7 @@ async def entrypoint(ctx: JobContext) -> None:
         stt_kwargs["keyterms"] = STT_KEYTERMS
 
     logger.info(
-        "CONFIG llm=%s temp=%s stt=%s/%s tts=sonic-3 voice=%s emotion=%s speed=%s",
+        "CONFIG llm=%s temp=%s stt=%s/%s tts=sonic-3 voice=%s emotion=%s speed=%s tools=%d",
         SLOW_LLM_MODEL,
         LLM_TEMPERATURE,
         stt_kwargs["model"],
@@ -421,6 +485,14 @@ async def entrypoint(ctx: JobContext) -> None:
         CARTESIA_VOICE[:8] + "...",
         CARTESIA_EMOTION,
         CARTESIA_SPEED,
+        len(AGENT_TOOLS),
+    )
+
+    tts = cartesia.TTS(
+        model="sonic-3",
+        voice=CARTESIA_VOICE,
+        emotion=CARTESIA_EMOTION,
+        speed=CARTESIA_SPEED,
     )
 
     session = AgentSession(
@@ -432,12 +504,8 @@ async def entrypoint(ctx: JobContext) -> None:
             base_url=GROQ_BASE_URL,
             temperature=LLM_TEMPERATURE,
         ),
-        tts=cartesia.TTS(
-            model="sonic-3",
-            voice=CARTESIA_VOICE,
-            emotion=CARTESIA_EMOTION,
-            speed=CARTESIA_SPEED,
-        ),
+        tts=tts,
+        tools=AGENT_TOOLS,
         turn_handling=TurnHandlingOptions(**turn_handling),
         # give the browser a moment to calibrate acoustic echo cancellation so
         # the agent doesn't interrupt itself
@@ -446,12 +514,19 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     tracker = TurnTracker()
+    emotion_turn = 0
 
     # transcribe events are published back into the room automatically so the
     # frontend can render a live transcript
     @session.on("user_input_transcribed")
     def _on_user_transcript(ev) -> None:
+        nonlocal emotion_turn
         tracker.on_user_transcript(ev)
+        if getattr(ev, "is_final", False):
+            emotion_turn += 1
+            emotion = _emotion_for(ev.transcript or "")
+            tts.update_options(emotion=emotion)
+            logger.info("EMOTION turn=%d emo=%s", emotion_turn, emotion)
 
     @session.on("user_transcription_timeout")
     def _on_user_timeout(ev) -> None:
