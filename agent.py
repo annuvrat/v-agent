@@ -15,7 +15,7 @@ from livekit.agents import (
     cli,
     room_io,
 )
-from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, silero
+from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, sarvam, silero
 
 from tools import calculate, get_weather_today, web_search, what_time_is_it
 
@@ -39,16 +39,38 @@ CARTESIA_EMOTION = os.getenv("CARTESIA_EMOTION") or "curious, warm and friendly,
 CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.94"))
 LOG_SUMMARY_EVERY = int(os.getenv("LOG_SUMMARY_EVERY", "10") or "10")
 
+# ---- provider selection ---------------------------------------------------
+# "sarvam" is the default; set STT_PROVIDER/TTS_PROVIDER to deepgram/cartesia to
+# revert to the previous stack without code changes.
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "sarvam").strip().lower()
+STT_PROVIDER = os.getenv("STT_PROVIDER", "sarvam").strip().lower()
+
+# ---- Sarvam (https://sarvam.ai) - Indian-language STT/TTS ------------------
+# Note Sarvam uses BCP-47 codes (en-IN), not en-US.
+SARVAM_LANGUAGE = os.getenv("SARVAM_LANGUAGE", "en-IN")
+SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
+# bulbul:v3 female voices: suhani, rupali, tanya, shruti, kavitha, priya, neha...
+SARVAM_TTS_VOICE = os.getenv("SARVAM_TTS_VOICE", "suhani")
+# Speech rate multiplier (valid 0.3 - 3.0), base baseline before Mia's dynamic pacing.
+SARVAM_TTS_PACE = float(os.getenv("SARVAM_TTS_PACE", "1.0"))
+SARVAM_TTS_SAMPLE_RATE = int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "22050"))
+# Raw 16-bit PCM avoids mp3 decode latency/CPU in the agent.
+SARVAM_TTS_CODEC = os.getenv("SARVAM_TTS_CODEC", "linear16")
+# Lower = audio starts sooner (valid 30 - 200); 150 max chunk keeps prosody
+# natural while still streaming.
+SARVAM_TTS_MIN_BUFFER = int(os.getenv("SARVAM_TTS_MIN_BUFFER", "30"))
+SARVAM_TTS_MAX_CHUNK = int(os.getenv("SARVAM_TTS_MAX_CHUNK", "150"))
+SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v4")
+# transcribe / translate / verbatim / translit / codemix (saaras only)
+SARVAM_STT_MODE = os.getenv("SARVAM_STT_MODE", "transcribe")
+
 # -- dynamic emotion ---------------------------------------------------------
-# Sonic-3 lets a free-form phrase steer the delivery. We pick the phrase per
-# turn from the user's wording so Mia sounds like she's actually listening.
-NEUTRAL_EMOTIONS = [
-    "curious, warm and friendly, light and conversational",
-    "friendly, bright and natural, with a relaxed pace",
-    "thoughtful, calm and conversational, lightly expressive",
-]
+# The user's wording steers how Mia delivers the reply. The sentiment label is
+# mapped per TTS provider: Sarvam gets a `pace` multiplier (bulbul has no
+# emotion control), Cartesia gets an emotion phrase.
+NEUTRAL_EMOTIONS = ["neutral-warm", "neutral-bright", "neutral-thoughtful"]
 EMOTION_RULES = [
-    # (label, trigger words, emotion phrase for sonic-3 voice controls)
+    # (label, trigger words)
     (
         "frustrated",
         (
@@ -56,7 +78,6 @@ EMOTION_RULES = [
             "not working", "issue", "problem", "frustrat", "wrong", "sick", "ugh",
             "crap", "screw", "ridiculous", "useless", "junk", "fail",
         ),
-        "calm, patient, empathetic and reassuring",
     ),
     (
         "excited",
@@ -64,7 +85,6 @@ EMOTION_RULES = [
             "awesome", "amazing", "great", "love", "excit", "wow", "cool", "fantastic",
             "perfect", "incredible", "nice", "happy", "yay", "awesome", "brilliant",
         ),
-        "bright, upbeat, warm and energetic",
     ),
     (
         "sad",
@@ -72,19 +92,37 @@ EMOTION_RULES = [
             "sad", "sorry", "miss", "lonely", "down", "cry", "hurt", "depressed",
             "miserable", "grief", "heartbroken", "rough day",
         ),
-        "soft, gentle, kind and comforting",
     ),
 ]
+# Sarvam bulbul paces per label (valid 0.3 - 3.0). Slightly slower than the
+# 1.0 baseline reads more thoughtful; a touch faster mirrors excited energy.
+EMOTION_PACE = {
+    "frustrated": 0.92,
+    "excited": 1.08,
+    "sad": 0.94,
+    "neutral-warm": 1.0,
+    "neutral-bright": 1.02,
+    "neutral-thoughtful": 0.96,
+}
+# Cartesia sonic-3 emotion phrases per label (revert path)
+EMOTION_PHRASES = {
+    "frustrated": "calm, patient, empathetic and reassuring",
+    "excited": "bright, upbeat, warm and energetic",
+    "sad": "soft, gentle, kind and comforting",
+    "neutral-warm": "curious, warm and friendly, light and conversational",
+    "neutral-bright": "friendly, bright and natural, with a relaxed pace",
+    "neutral-thoughtful": "thoughtful, calm and conversational, lightly expressive",
+}
 _default_emotion_idx = 0
 
 
 def _emotion_for(text: str) -> str:
     global _default_emotion_idx
     lowered = text.lower()
-    for label, words, phrase in EMOTION_RULES:
+    for label, words in EMOTION_RULES:
         if any(word in lowered for word in words):
             logger.info("EMOTION_RULE matched=%s text=%r", label, text.strip())
-            return phrase
+            return label
     _default_emotion_idx = (_default_emotion_idx + 1) % len(NEUTRAL_EMOTIONS)
     return NEUTRAL_EMOTIONS[_default_emotion_idx]
 
@@ -447,8 +485,8 @@ async def entrypoint(ctx: JobContext) -> None:
 
     turn_handling = {
         "endpointing": {
-            # Deepgram's final transcript can arrive after the first endpoint
-            # signal; leave enough time for the final words to be included.
+            # leave a beat for the STT's final transcript to arrive after the
+            # VAD endpoint so the last words are included
             "min_delay": 0.6,
             "max_delay": 1.2,
         },
@@ -469,35 +507,85 @@ async def entrypoint(ctx: JobContext) -> None:
     if TURN_DETECTOR is not None:
         turn_handling["turn_detection"] = TURN_DETECTOR
 
-    stt_kwargs = {
-        "model": os.environ.get("DEEPGRAM_MODEL", "nova-3"),
-        "language": STT_LANGUAGE,
-    }
-    if STT_KEYTERMS:
-        stt_kwargs["keyterms"] = STT_KEYTERMS
+    if STT_PROVIDER == "sarvam":
+        stt = sarvam.stt.STT(
+            language=SARVAM_LANGUAGE,
+            model=SARVAM_STT_MODEL,
+            mode=SARVAM_STT_MODE,
+            # Recommended for voice agents: aggressive VAD + explicit flush signal
+            # so transcripts land as soon as the user stops speaking.
+            high_vad_sensitivity=True,
+            flush_signal=True,
+        )
+    else:
+        stt_kwargs = {
+            "model": os.environ.get("DEEPGRAM_MODEL", "nova-3"),
+            "language": STT_LANGUAGE,
+        }
+        if STT_KEYTERMS:
+            stt_kwargs["keyterms"] = STT_KEYTERMS
+        stt = deepgram.STT(**stt_kwargs)
+
+    if TTS_PROVIDER == "sarvam":
+        tts = sarvam.tts.TTS(
+            target_language_code=SARVAM_LANGUAGE,
+            model=SARVAM_TTS_MODEL,
+            speaker=SARVAM_TTS_VOICE,
+            speech_sample_rate=SARVAM_TTS_SAMPLE_RATE,
+            pace=SARVAM_TTS_PACE,
+            output_audio_codec=SARVAM_TTS_CODEC,
+            min_buffer_size=SARVAM_TTS_MIN_BUFFER,
+            max_chunk_length=SARVAM_TTS_MAX_CHUNK,
+        )
+    else:
+        tts = cartesia.TTS(
+            model="sonic-3",
+            voice=CARTESIA_VOICE,
+            emotion=CARTESIA_EMOTION,
+            speed=CARTESIA_SPEED,
+        )
 
     logger.info(
-        "CONFIG llm=%s temp=%s stt=%s/%s tts=sonic-3 voice=%s emotion=%s speed=%s tools=%d",
+        "CONFIG llm=%s temp=%s tools=%d",
         SLOW_LLM_MODEL,
         LLM_TEMPERATURE,
-        stt_kwargs["model"],
-        STT_LANGUAGE,
-        CARTESIA_VOICE[:8] + "...",
-        CARTESIA_EMOTION,
-        CARTESIA_SPEED,
         len(AGENT_TOOLS),
     )
-
-    tts = cartesia.TTS(
-        model="sonic-3",
-        voice=CARTESIA_VOICE,
-        emotion=CARTESIA_EMOTION,
-        speed=CARTESIA_SPEED,
-    )
+    if STT_PROVIDER == "sarvam":
+        logger.info(
+            "CONFIG stt=sarvam/%s lang=%s mode=%s vad_high=1 flush=1",
+            SARVAM_STT_MODEL,
+            SARVAM_LANGUAGE,
+            SARVAM_STT_MODE,
+        )
+    else:
+        logger.info(
+            "CONFIG stt=deepgram/%s lang=%s keyterms=%d",
+            stt_kwargs["model"],
+            STT_LANGUAGE,
+            len(STT_KEYTERMS),
+        )
+    if TTS_PROVIDER == "sarvam":
+        logger.info(
+            "CONFIG tts=sarvam/%s voice=%s lang=%s pace=%s codec=%s sr=%s",
+            SARVAM_TTS_MODEL,
+            SARVAM_TTS_VOICE,
+            SARVAM_LANGUAGE,
+            SARVAM_TTS_PACE,
+            SARVAM_TTS_CODEC,
+            SARVAM_TTS_SAMPLE_RATE,
+        )
+    else:
+        logger.info(
+            "CONFIG tts=sonic-3 voice=%s emotion=%s speed=%s",
+            CARTESIA_VOICE[:8] + "...",
+            CARTESIA_EMOTION,
+            CARTESIA_SPEED,
+        )
 
     session = AgentSession(
         vad=ctx.proc.userdata["vad"],
-        stt=deepgram.STT(**stt_kwargs),
+        stt=stt,
         llm=openai.LLM(
             model=SLOW_LLM_MODEL,
             api_key=os.environ["GROQ_API_KEY"],
@@ -524,9 +612,15 @@ async def entrypoint(ctx: JobContext) -> None:
         tracker.on_user_transcript(ev)
         if getattr(ev, "is_final", False):
             emotion_turn += 1
-            emotion = _emotion_for(ev.transcript or "")
-            tts.update_options(emotion=emotion)
-            logger.info("EMOTION turn=%d emo=%s", emotion_turn, emotion)
+            label = _emotion_for(ev.transcript or "")
+            if TTS_PROVIDER == "sarvam":
+                pace = EMOTION_PACE.get(label, SARVAM_TTS_PACE)
+                tts.update_options(pace=pace)
+                logger.info("EMOTION turn=%d emo=%s pace=%s", emotion_turn, label, pace)
+            else:
+                phrase = EMOTION_PHRASES.get(label, CARTESIA_EMOTION)
+                tts.update_options(emotion=phrase)
+                logger.info("EMOTION turn=%d emo=%s phrase=%s", emotion_turn, label, phrase)
 
     @session.on("user_transcription_timeout")
     def _on_user_timeout(ev) -> None:
