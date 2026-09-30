@@ -52,7 +52,7 @@ SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
 # bulbul:v3 female voices: suhani, rupali, tanya, shruti, kavitha, priya, neha...
 SARVAM_TTS_VOICE = os.getenv("SARVAM_TTS_VOICE", "suhani")
 # Speech rate multiplier (valid 0.3 - 3.0), base baseline before Mia's dynamic pacing.
-SARVAM_TTS_PACE = float(os.getenv("SARVAM_TTS_PACE", "1.0"))
+SARVAM_TTS_PACE = float(os.getenv("SARVAM_TTS_PACE", "0.92"))
 SARVAM_TTS_SAMPLE_RATE = int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "22050"))
 # Raw 16-bit PCM avoids mp3 decode latency/CPU in the agent.
 SARVAM_TTS_CODEC = os.getenv("SARVAM_TTS_CODEC", "linear16")
@@ -97,12 +97,12 @@ EMOTION_RULES = [
 # Sarvam bulbul paces per label (valid 0.3 - 3.0). Slightly slower than the
 # 1.0 baseline reads more thoughtful; a touch faster mirrors excited energy.
 EMOTION_PACE = {
-    "frustrated": 0.92,
-    "excited": 1.08,
-    "sad": 0.94,
-    "neutral-warm": 1.0,
-    "neutral-bright": 1.02,
-    "neutral-thoughtful": 0.96,
+    "frustrated": 0.90,
+    "excited": 1.02,
+    "sad": 0.92,
+    "neutral-warm": 0.94,
+    "neutral-bright": 0.96,
+    "neutral-thoughtful": 0.92,
 }
 # Cartesia sonic-3 emotion phrases per label (revert path)
 EMOTION_PHRASES = {
@@ -114,6 +114,12 @@ EMOTION_PHRASES = {
     "neutral-thoughtful": "thoughtful, calm and conversational, lightly expressive",
 }
 _default_emotion_idx = 0
+
+# Dispatch name for the agent. An explicitly named agent is required for SIP
+# dispatch (phone calls) but is NOT auto-dispatched, so token_server.py must
+# request this same name via RoomAgentDispatch for web rooms to still work.
+# Keep in sync with the agentName in your LiveKit Telephony dispatch rule.
+AGENT_NAME = os.getenv("AGENT_NAME", "mia")
 
 
 def _emotion_for(text: str) -> str:
@@ -478,7 +484,7 @@ def prewarm(proc: JobProcess) -> None:
 server.setup_fnc = prewarm
 
 
-@server.rtc_session()
+@server.rtc_session(agent_name=AGENT_NAME)
 async def entrypoint(ctx: JobContext) -> None:
     ctx.log_context_fields = {"room": ctx.room.name}
     logger.info("starting agent for room %s", ctx.room.name)

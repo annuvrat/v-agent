@@ -10,12 +10,18 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from livekit.api import AccessToken, VideoGrants
+from livekit.protocol.agent_dispatch import RoomAgentDispatch
+from livekit.protocol.room import RoomConfiguration
 
 load_dotenv()
 
 LIVEKIT_URL = os.getenv("LIVEKIT_URL")
 LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
 LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
+
+# Must match the agent_name in agent.py's @server.rtc_session() and the
+# agentName in your LiveKit Telephony dispatch rule.
+AGENT_NAME = os.getenv("AGENT_NAME", "mia")
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR / "web"
@@ -53,6 +59,11 @@ async def get_token(
                 can_publish=True,
                 can_subscribe=True,
             )
+        )
+        # The agent now registers under an explicit name, so it is no longer
+        # auto-dispatched. Request it for every browser-joined room.
+        .with_room_config(
+            RoomConfiguration(agents=[RoomAgentDispatch(agent_name=AGENT_NAME)])
         )
         .to_jwt()
     )
