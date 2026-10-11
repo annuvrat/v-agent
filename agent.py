@@ -18,8 +18,31 @@ from livekit.agents import (
 from livekit.plugins import cartesia, deepgram, noise_cancellation, openai, sarvam, silero
 
 from tools import calculate, get_weather_today, web_search, what_time_is_it
+from whiteboard import (
+    wb_arrow,
+    wb_circle,
+    wb_clear,
+    wb_highlight,
+    wb_line,
+    wb_rect,
+    wb_stroke,
+    wb_text,
+)
 
-AGENT_TOOLS = [web_search, get_weather_today, what_time_is_it, calculate]
+AGENT_TOOLS = [
+    web_search,
+    get_weather_today,
+    what_time_is_it,
+    calculate,
+    wb_clear,
+    wb_text,
+    wb_line,
+    wb_arrow,
+    wb_rect,
+    wb_circle,
+    wb_stroke,
+    wb_highlight,
+]
 
 logger = logging.getLogger("voice-agent")
 
@@ -454,7 +477,19 @@ class VoiceAgent(Agent):
                 "you haven't retrieved. When you do use web search, present results "
                 "conversationally, e.g. 'Looks like...' or 'According to..., ' and "
                 "name the source briefly. If a tool is unavailable or fails, just "
-                "say so simply and move on naturally."
+                "say so simply and move on naturally. "
+                "You are also a teacher with a whiteboard. The user may have a "
+                "canvas page open where everything you draw appears live. The "
+                "board is 1000 by 1000 units, origin top-left. When the user "
+                "asks you to explain, teach, or show something visual, draw it "
+                "step by step: add one or two elements, explain what you just "
+                "drew, then add the next. Prefer simple labeled shapes, "
+                "arrows, and short labels of a few words over dense diagrams - "
+                "never paragraphs on the board. Say what you are drawing as "
+                "you draw it, like 'I'm sketching the ...'. Only draw when it "
+                "genuinely helps the explanation; for pure chit-chat just "
+                "talk. If a drawing tool says the board is unavailable, carry "
+                "on with voice only."
             )
         )
 
