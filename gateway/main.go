@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -97,7 +99,63 @@ func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write([]byte(`{"ok":true,"service":"realtime-voice-gateway"}`))
 }
 
+var (
+	rateLimitMu sync.Mutex
+	ipRequests  = make(map[string][]time.Time)
+)
+
+func checkRateLimit(ip string, limit int, window time.Duration) bool {
+	rateLimitMu.Lock()
+	defer rateLimitMu.Unlock()
+
+	now := time.Now()
+	cutoff := now.Add(-window)
+
+	var valid []time.Time
+	for _, t := range ipRequests[ip] {
+		if t.After(cutoff) {
+			valid = append(valid, t)
+		}
+	}
+
+	if len(valid) >= limit {
+		ipRequests[ip] = valid
+		return false
+	}
+
+	ipRequests[ip] = append(valid, now)
+	return true
+}
+
+func getClientIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		parts := strings.Split(xff, ",")
+		return strings.TrimSpace(parts[0])
+	}
+	if xrip := r.Header.Get("X-Real-IP"); xrip != "" {
+		return strings.TrimSpace(xrip)
+	}
+	return r.RemoteAddr
+}
+
 func getTokenHandler(w http.ResponseWriter, r *http.Request) {
+	clientIP := getClientIP(r)
+	if !checkRateLimit(clientIP, 25, time.Hour) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "Demo rate limit reached (25 calls/hour). Please contact Annuvrat to schedule a dedicated demo!",
+		})
+		return
+	}
+
+	visitorName := strings.TrimSpace(r.URL.Query().Get("visitor_name"))
+	if visitorName == "" {
+		visitorName = "Guest Visitor"
+	}
+
+	log.Printf("===> [RECRUITER / VISITOR] Name: %q | IP: %s | Time: %s", visitorName, clientIP, time.Now().Format("2006-01-02 15:04:05"))
+
 	room := r.URL.Query().Get("room")
 	if room == "" {
 		room = "lobby"
@@ -128,7 +186,8 @@ func getTokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	at.AddGrant(grant).
 		SetIdentity(identity).
-		SetValidFor(time.Hour)
+		SetName(visitorName).
+		SetValidFor(15 * time.Minute)
 
 	token, err := at.ToJWT()
 	if err != nil {
@@ -139,10 +198,11 @@ func getTokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]string{
-		"url":      livekitURL,
-		"token":    token,
-		"identity": identity,
-		"room":     room,
+		"url":          livekitURL,
+		"token":        token,
+		"identity":     identity,
+		"visitor_name": visitorName,
+		"room":         room,
 	})
 }
 

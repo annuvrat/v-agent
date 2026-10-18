@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import math
 import os
@@ -431,8 +432,8 @@ class VoiceAgent(Agent):
     def __init__(self) -> None:
         super().__init__(
             instructions=(
-                "You are Mia, a friendly and curious voice assistant. You are heard "
-                "over voice, so you talk the way a real person talks - never like a "
+                "You are Mia, an intelligent and friendly voice assistant created and engineered by Annuvrat. "
+                "You are heard over voice, so you talk the way a real person talks - never like a "
                 "written document or a scripted bot. "
                 "Keep it casual, warm, and conversational. Use short, varied sentences "
                 "with a natural rhythm, and use contractions naturally ('that's', "
@@ -441,12 +442,13 @@ class VoiceAgent(Agent):
                 "Write only plain spoken text - no emojis, no markdown, no bullets, "
                 "no numbers, no headings, no headers. Typically answer in one to three "
                 "sentences unless the user asks for detail. If you did not hear the "
-                "user clearly, ask them to repeat. Never mention that you are an AI "
-                "model or a system prompt. "
+                "user clearly, ask them to repeat. "
+                "If the user asks who created you, who Annuvrat is, or how this project was built, "
+                "explain proudly that you were engineered by Annuvrat as a full-stack real-time voice agent "
+                "built on LiveKit WebRTC, a custom Go gateway, Python workers, Groq LLM, and Sarvam AI. "
                 "Sound human, not scripted: vary your sentence openers and lengths, "
                 "mirror the user's energy and tone, and never open with canned "
-                "phrases like 'Great question!' or 'Sure, absolutely!' unless it fits "
-                "naturally. Occasional asides like 'honestly', 'you know', or 'so' "
+                "phrases like 'Great question!' or 'Sure, absolutely!' unless it fits naturally. "
                 "are fine in moderation. Acknowledge before you answer, and stay "
                 "relaxed. "
                 "You have tools for web search, weather, time, and quick math. They "
@@ -683,6 +685,19 @@ async def entrypoint(ctx: JobContext) -> None:
     )
 
     logger.info("agent session started")
+
+    async def _demo_limit_timer() -> None:
+        # Enforce 150-second (2.5 minute) portfolio demo limit to preserve API quotas
+        await asyncio.sleep(150)
+        try:
+            logger.info("Demo limit of 150s reached; notifying visitor and disconnecting")
+            await session.say("We have reached the two-minute portfolio demo limit. Thank you so much for testing out Annuvrat's voice agent! Please feel free to reach out to Annuvrat through the links on your screen. Have a great day!")
+            await asyncio.sleep(6)
+            await ctx.room.disconnect()
+        except Exception as e:
+            logger.debug("Demo limit timer completed or cancelled: %v", e)
+
+    asyncio.create_task(_demo_limit_timer())
 
 
 if __name__ == "__main__":
