@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: realtime-voice-agent
+    runtime: docker
+    plan: free
+    region: oregon
+    envVars:
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: DEEPGRAM_API_KEY
+        sync: false
+      - key: CARTESIA_API_KEY
+        sync: false
+      - key: TTS_PROVIDER
+        value: sarvam
+      - key: STT_PROVIDER
+        value: sarvam
+      - key: ENABLE_BVC
+        value: "false"

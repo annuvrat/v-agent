@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -8,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/joho/godotenv"
+	"github.com/livekit/protocol/auth"
 )
 
 const (
@@ -24,6 +28,7 @@ var upgrader = websocket.Upgrader{
 		return true
 	},
 }
+
 var gatewaySecret string
 
 type envelope struct {
@@ -36,25 +41,126 @@ type envelope struct {
 }
 
 func main() {
-	gatewaySecret = "dev-only-change-me"
+	_ = godotenv.Load(".env")
+	_ = godotenv.Load("../.env")
+
+	gatewaySecret = os.Getenv("GATEWAY_SECRET")
 	if gatewaySecret == "" {
-		log.Fatal("GATEWAY_SECRET is required")
+		gatewaySecret = "dev-only-change-me"
 	}
-	port := os.Getenv("GATEWAY_PORT")
+
+	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8081"
+		port = os.Getenv("GATEWAY_PORT")
+	}
+	if port == "" {
+		port = "8000"
 	}
 
-	http.HandleFunc("/health", healthHandler)
-	http.HandleFunc("/ws", websocketHandler)
+	webDir := os.Getenv("WEB_DIR")
+	if webDir == "" {
+		if _, err := os.Stat("web"); err == nil {
+			webDir = "web"
+		} else if _, err := os.Stat("../web"); err == nil {
+			webDir = "../web"
+		} else {
+			webDir = "web"
+		}
+	}
 
-	log.Printf("voice gateway listening on http://127.0.0.1:%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	mux := http.NewServeMux()
+	mux.HandleFunc("/health", healthHandler)
+	mux.HandleFunc("/get_token", getTokenHandler)
+	mux.HandleFunc("/get_gateway_token", getGatewayTokenHandler)
+	mux.HandleFunc("/ws", websocketHandler)
+	mux.Handle("/", staticFileServer(webDir))
+
+	log.Printf("server listening on http://0.0.0.0:%s (serving web from %s)", port, webDir)
+	log.Fatal(http.ListenAndServe(":"+port, corsMiddleware(mux)))
+}
+
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "*")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"ok":true,"service":"voice-gateway"}`))
+	_, _ = w.Write([]byte(`{"ok":true,"service":"realtime-voice-gateway"}`))
+}
+
+func getTokenHandler(w http.ResponseWriter, r *http.Request) {
+	room := r.URL.Query().Get("room")
+	if room == "" {
+		room = "lobby"
+	}
+	identity := r.URL.Query().Get("identity")
+	if identity == "" {
+		b := make([]byte, 4)
+		_, _ = rand.Read(b)
+		identity = "user-" + hex.EncodeToString(b)
+	}
+
+	apiKey := os.Getenv("LIVEKIT_API_KEY")
+	apiSecret := os.Getenv("LIVEKIT_API_SECRET")
+	livekitURL := os.Getenv("LIVEKIT_URL")
+
+	if apiKey == "" || apiSecret == "" {
+		http.Error(w, `{"error":"LIVEKIT_API_KEY or LIVEKIT_API_SECRET not configured"}`, http.StatusInternalServerError)
+		return
+	}
+
+	at := auth.NewAccessToken(apiKey, apiSecret)
+	grant := &auth.VideoGrant{
+		Room:     room,
+		RoomJoin: true,
+	}
+	grant.SetCanPublish(true)
+	grant.SetCanSubscribe(true)
+
+	at.AddGrant(grant).
+		SetIdentity(identity).
+		SetValidFor(time.Hour)
+
+	token, err := at.ToJWT()
+	if err != nil {
+		log.Printf("failed to generate token: %v", err)
+		http.Error(w, `{"error":"failed to generate LiveKit access token"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"url":      livekitURL,
+		"token":    token,
+		"identity": identity,
+		"room":     room,
+	})
+}
+
+func getGatewayTokenHandler(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"gateway_token": gatewaySecret,
+	})
+}
+
+func staticFileServer(webDir string) http.Handler {
+	fs := http.FileServer(http.Dir(webDir))
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		}
+		fs.ServeHTTP(w, r)
+	})
 }
 
 func websocketHandler(w http.ResponseWriter, r *http.Request) {

@@ -276,8 +276,10 @@
 
         const { gateway_token } = await gatewayResponse.json();
 
-        const gatewayHost = window.location.hostname || "127.0.0.1";
-        controlSocket = new WebSocket(`ws://${gatewayHost}:8081/ws`);
+        const loc = window.location;
+        const wsProto = loc.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${wsProto}//${loc.host}/ws`;
+        controlSocket = new WebSocket(wsUrl);
 
         controlSocket.addEventListener("open", () => {
           controlSocket.send(

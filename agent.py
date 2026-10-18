@@ -38,6 +38,7 @@ CARTESIA_EMOTION = os.getenv("CARTESIA_EMOTION") or "curious, warm and friendly,
 # 1.0 reads more thoughtful and human when combined with an expressive emotion.
 CARTESIA_SPEED = float(os.getenv("CARTESIA_SPEED", "0.94"))
 LOG_SUMMARY_EVERY = int(os.getenv("LOG_SUMMARY_EVERY", "10") or "10")
+ENABLE_BVC = os.getenv("ENABLE_BVC", "false").strip().lower() in ("true", "1", "yes")
 
 # ---- provider selection ---------------------------------------------------
 # "sarvam" is the default; set STT_PROVIDER/TTS_PROVIDER to deepgram/cartesia to
@@ -659,14 +660,18 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.info("SESSION_CLOSE reason=%s error=%r", ev.reason, ev.error)
         tracker.print_summary("close")
 
+    audio_input_opts = room_io.AudioInputOptions()
+    if ENABLE_BVC:
+        logger.info("Local BVC noise cancellation enabled")
+        audio_input_opts.noise_cancellation = noise_cancellation.BVC()
+    else:
+        logger.info("Local BVC disabled for low-RAM footprint (WebRTC browser handles noise suppression)")
+
     await session.start(
         agent=VoiceAgent(),
         room=ctx.room,
         room_options=room_io.RoomOptions(
-            audio_input=room_io.AudioInputOptions(
-                # Filter steady room noise before VAD and Deepgram receive audio.
-                noise_cancellation=noise_cancellation.BVC(),
-            ),
+            audio_input=audio_input_opts,
         ),
     )
 
