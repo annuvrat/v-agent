@@ -466,9 +466,10 @@ class VoiceAgent(Agent):
         )
 
 
-_configure_logging()
+from livekit.agents.job import JobExecutorType
 
 server = AgentServer(
+    job_executor_type=JobExecutorType.THREAD,
     num_idle_processes=0,
     port=0,
 )
@@ -587,8 +588,12 @@ async def entrypoint(ctx: JobContext) -> None:
             CARTESIA_SPEED,
         )
 
+    vad_model = getattr(getattr(ctx, "proc", None), "userdata", {}).get("vad")
+    if vad_model is None:
+        vad_model = silero.VAD.load()
+
     session = AgentSession(
-        vad=ctx.proc.userdata["vad"],
+        vad=vad_model,
         stt=stt,
         llm=openai.LLM(
             model=SLOW_LLM_MODEL,
