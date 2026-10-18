@@ -468,7 +468,10 @@ class VoiceAgent(Agent):
 
 _configure_logging()
 
-server = AgentServer()
+server = AgentServer(
+    num_idle_processes=0,
+    port=0,
+)
 
 
 def prewarm(proc: JobProcess) -> None:
