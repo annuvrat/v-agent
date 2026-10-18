@@ -54,13 +54,12 @@ SARVAM_TTS_MODEL = os.getenv("SARVAM_TTS_MODEL", "bulbul:v3")
 SARVAM_TTS_VOICE = os.getenv("SARVAM_TTS_VOICE", "suhani")
 # Speech rate multiplier (valid 0.3 - 3.0), base baseline before Mia's dynamic pacing.
 SARVAM_TTS_PACE = float(os.getenv("SARVAM_TTS_PACE", "1.0"))
-SARVAM_TTS_SAMPLE_RATE = int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "22050"))
+SARVAM_TTS_SAMPLE_RATE = int(os.getenv("SARVAM_TTS_SAMPLE_RATE", "24000"))
 # Raw 16-bit PCM avoids mp3 decode latency/CPU in the agent.
 SARVAM_TTS_CODEC = os.getenv("SARVAM_TTS_CODEC", "linear16")
-# Lower = audio starts sooner (valid 30 - 200); 150 max chunk keeps prosody
-# natural while still streaming.
-SARVAM_TTS_MIN_BUFFER = int(os.getenv("SARVAM_TTS_MIN_BUFFER", "30"))
-SARVAM_TTS_MAX_CHUNK = int(os.getenv("SARVAM_TTS_MAX_CHUNK", "150"))
+# 120 min buffer provides smooth playback without underrun on cloud VMs
+SARVAM_TTS_MIN_BUFFER = int(os.getenv("SARVAM_TTS_MIN_BUFFER", "120"))
+SARVAM_TTS_MAX_CHUNK = int(os.getenv("SARVAM_TTS_MAX_CHUNK", "250"))
 SARVAM_STT_MODEL = os.getenv("SARVAM_STT_MODEL", "saaras:v4")
 # transcribe / translate / verbatim / translit / codemix (saaras only)
 SARVAM_STT_MODE = os.getenv("SARVAM_STT_MODE", "transcribe")

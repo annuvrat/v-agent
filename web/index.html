@@ -444,6 +444,17 @@
             const el = track.attach();
             el.setAttribute("autoplay", "");
             el.setAttribute("playsinline", "");
+            // Set 200ms jitter buffer target to absorb cloud CPU scheduling latency and eliminate audio cracking
+            try {
+              const r = track.receiver;
+              if (r && "jitterBufferTarget" in r) {
+                r.jitterBufferTarget = 200; // ms
+              } else if (r && "playoutDelayHint" in r) {
+                r.playoutDelayHint = 0.2; // seconds
+              }
+            } catch (e) {
+              console.debug("jitter buffer hint error", e);
+            }
           }
         })
         .on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
